@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>TipJar dApp</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f6f8fa;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 30px;
+    }
+    h1 {
+      color: #333;
+    }
+    .card {
+      background: white;
+      padding: 20px 30px;
+      border-radius: 12px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      max-width: 400px;
+      width: 100%;
+    }
+    input, select, button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 10px;
+      margin-bottom: 15px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      font-size: 16px;
+    }
+    button {
+      background-color: #007bff;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    button:hover {
+      background-color: #0056b3;
+    }
+    #status, #walletAddress, #liveBalance {
+      font-size: 14px;
+      color: #555;
+      margin-top: 10px;
+    }
+    ul#history {
+      font-size: 14px;
+      margin-top: 10px;
+      padding-left: 20px;
+      color: #444;
+    }
+  </style>
+</head>
+<body>
+  <h1>TipJar</h1>
+  <p id="walletAddress">Wallet: not connected</p>
+  <div class="card">
+    <button id="connectBtn">Connect Wallet</button>
+
+    <label for="tokenSelect">Choose token:</label>
+    <select id="tokenSelect">
+      <option value="FAKE">FAKE</option>
+      <option value="WETH">WETH</option>
+    </select>
+
+    <input id="approveAmount" type="number" placeholder="Amount to Approve">
+    <button id="approveBtn">Approve</button>
+
+    <input id="tipAmount" type="number" placeholder="Amount to Tip">
+    <button id="tipBtn">Send Tip</button>
+
+    <button id="withdrawBtn" style="display: none;">Withdraw (Owner only)</button>
+
+    <p id="liveBalance">Live Balance: -</p>
+    <p id="status"></p>
+    <ul id="history"></ul>
+  </div>
+
+  <script>
+    const tokenAddresses = {
+      FAKE: "0x6ec77faae56f09879ce80cf54c3c3b377968c08c",
+      WETH: "0xdd13E55209Fd76AfE204dBda4007C227904f0a81"
+    };
+
+    const tipJarAddress = "0xde53730418b272f99e13fcbad336f3665f0e3e63";
+
+    const tokenABI = [
+      "function approve(address spender, uint256 amount) external returns (bool)",
+      "function transferFrom(address sender, address recipient, uint256 amount) external returns (bool)",
+      "function balanceOf(address account) external view returns (uint256)",
+      "function decimals() external view returns (uint8)"
+    ];
+
+    const tipJarABI = [
+      "function tip(address tokenAddress, uint256 amount) public",
+      "function getBalance(address tokenAddress) public view returns (uint256)",
+      "function withdraw(address tokenAddress) public",
+      "function owner() public view returns (address)"
+    ];
+
+    let provider, signer, currentAccount, tokenContract, tipJarContract, isOwner = false;
+
+    function shortenAddress(address) {
+      return address.substring(0, 6) + "..." + address.substring(address.length - 4);
+    }
+
+    function loadHistory() {
+      const history = JSON.parse(localStorage.getItem("tipHistory") || "[]");
+      const ul = document.getElementById("history");
+      ul.innerHTML = "";
+      history.slice(0, 10).forEach(entry => {
+        const li = document.createElement("li");
+        li.innerText = `${shortenAddress(entry.from)} tipped ${entry.amount} ${entry.token} on ${new Date(entry.timestamp).toLocaleString()}`;
+        ul.appendChild(li);
+      });
+    }
+
+    function saveToHistory(from, amount, token) {
+      let history = JSON.parse(localStorage.getItem("tipHistory") || "[]");
+      history.unshift({ from, amount, token, timestamp: Date.now() });
+      localStorage.setItem("tipHistory", JSON.stringify(history));
+    }
+
+    async function checkOwnership() {
+      const owner = await tipJarContract.owner();
+      currentAccount = await signer.getAddress();
+      isOwner = (owner.toLowerCase() === currentAccount.toLowerCase());
+
+      document.getElementById("walletAddress").innerText = "Wallet: " + currentAccount;
+      if (isOwner) {
+        document.getElementById("withdrawBtn").style.display = "block";
+      } else {
+        document.getElementById("withdrawBtn").style.display = "none";
+      }
+    }
+
+    async function updateLiveBalance() {
+      const tokenAddress = getSelectedTokenAddress();
+      const tokenContract = new ethers.Contract(tokenAddress, tokenABI, signer);
+      const decimals = await tokenContract.decimals();
+      const rawBalance = await tipJarContract.getBalance(tokenAddress);
+      const formatted = ethers.utils.formatUnits(rawBalance, decimals);
+      document.getElementById("liveBalance").innerText = "Live Balance: " + formatted + " " + document.getElementById("tokenSelect").value;
+    }
+
+    document.getElementById("connectBtn").onclick = async () => {
+      if (window.ethereum) {
+        provider = new ethers.providers.Web3Provider(window.ethereum);
+        await provider.send("eth_requestAccounts", []);
+        signer = provider.getSigner();
+        tipJarContract = new ethers.Contract(tipJarAddress, tipJarABI, signer);
+        document.getElementById("status").innerText = "Wallet connected!";
+        await checkOwnership();
+        await updateLiveBalance();
+        loadHistory();
+      } else {
+        alert("Install MetaMask first.");
+      }
+    };
+
+    function getSelectedTokenAddress() {
+      const tokenName = document.getElementById("tokenSelect").value;
+      return tokenAddresses[tokenName];
+    }
+
+    document.getElementById("approveBtn").onclick = async () => {
+      const amount = document.getElementById("approveAmount").value;
+      const tokenAddress = getSelectedTokenAddress();
+      tokenContract = new ethers.Contract(tokenAddress, tokenABI, signer);
+      const tx = await tokenContract.approve(tipJarAddress, ethers.utils.parseUnits(amount, 18));
+      await tx.wait();
+      document.getElementById("status").innerText = "Approved " + amount + " tokens!";
+    };
+
+    document.getElementById("tipBtn").onclick = async () => {
+      const amount = document.getElementById("tipAmount").value;
+      const tokenAddress = getSelectedTokenAddress();
+      const tokenName = document.getElementById("tokenSelect").value;
+      const tx = await tipJarContract.tip(tokenAddress, ethers.utils.parseUnits(amount, 18));
+      await tx.wait();
+      document.getElementById("status").innerText = "Tipped " + amount + " " + tokenName + "!";
+      await updateLiveBalance();
+      const from = await signer.getAddress();
+      saveToHistory(from, amount, tokenName);
+      loadHistory();
+    };
+
+    document.getElementById("withdrawBtn").onclick = async () => {
+      if (!isOwner) return;
+      const tokenAddress = getSelectedTokenAddress();
+      const tx = await tipJarContract.withdraw(tokenAddress);
+      await tx.wait();
+      document.getElementById("status").innerText = "Withdraw complete!";
+      await updateLiveBalance();
+    };
+  </script>
+</body>
+</html>
